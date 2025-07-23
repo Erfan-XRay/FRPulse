@@ -1,5 +1,5 @@
 
-![Menu](https://github.com/Erfan-XRay/HPulse/blob/main/menu.png)
+![Menu](https://github.com/Erfan-XRay/FRPulse/blob/main/menu.png)
 
 ## What is FRPulse?
 a secure , stable and fast reverse tunnel based on [FRP](https://github.com/fatedier/frp)(UDP/TCP).
@@ -9,7 +9,7 @@ Run the following script on your server (Debian or Ubuntu):
 bash <(curl -Ls https://raw.githubusercontent.com/Erfan-XRay/FRPulse/main/FRPulse.sh)
 ```
 ## How to use ?
-[![Watch on YouTube](https://img.youtube.com/vi/mrXUkbtGxN0/0.jpg)](https://youtu.be/bbC_nseB2Bw?si=nZji-GRvXIOyXfGH)
+Video come soon
 ## ⚙️ Features
 - Add, remove, and manage client/server services
 - Support Ipv4/Ipv6
