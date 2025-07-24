@@ -19,7 +19,7 @@ SCRIPT_DIR="$(dirname "$TRUST_SCRIPT_PATH")"
 SETUP_MARKER_FILE="/var/lib/frpulse/.setup_complete"
 
 # --- Script Version ---
-SCRIPT_VERSION="1.0.0" # Define the script version for FRPulse
+SCRIPT_VERSION="1.4.0" # Define the script version for FRPulse
 
 # --- Helper Functions ---
 
@@ -624,7 +624,7 @@ maxIncomingStreams = $quic_max_incoming_streams
         print_error "Invalid port number. Please enter a number between 1 and 65535."
       fi
     done
-    print_success "Management dashboard enabled. Username: $dashboard_user, Password: $dashboard_pwd !!! Write it somewhere!!!"
+    print_success "Management dashboard enabled. Username: $dashboard_user, Password: $dashboard_pwd"
   else
     echo -e "${PROMPT_COLOR}Management dashboard disabled.${RESET}"
   fi
