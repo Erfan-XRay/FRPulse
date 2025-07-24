@@ -539,6 +539,60 @@ add_new_frpulse_server_action() {
   done
   echo ""
 
+  local udp_protocol_choice="N"
+  local kcp_bind_port=""
+  local quic_bind_port=""
+  local quic_config_toml=""
+
+  echo -e "👉 ${DEFAULT_TEXT_COLOR}Do you want to enable a UDP acceleration protocol (KCP/QUIC)? (1) KCP, (2) QUIC, (N) None (default: N):${RESET} "
+  read -p "" udp_protocol_choice_input
+  udp_protocol_choice=${udp_protocol_choice_input:-N}
+
+  case "$udp_protocol_choice" in
+    1)
+      kcp_bind_port="$listen_port" # Use the main listen port for KCP
+      print_success "KCP enabled and will use the main listen port ($kcp_bind_port)."
+      ;;
+    2)
+      quic_bind_port="$listen_port" # Use the main listen port for QUIC
+
+      local quic_keepalive_period="10"
+      local quic_max_idle_timeout="30"
+      local quic_max_incoming_streams="100000"
+
+      echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter QUIC keepalivePeriod (default: 10):${RESET} "
+      read -p "" kp_input
+      quic_keepalive_period=${kp_input:-10}
+
+      echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter QUIC maxIdleTimeout (default: 30):${RESET} "
+      read -p "" mit_input
+      quic_max_idle_timeout=${mit_input:-30}
+
+      echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter QUIC maxIncomingStreams (default: 100000):${RESET} "
+      read -p "" mis_input
+      quic_max_incoming_streams=${mis_input:-100000}
+
+      quic_config_toml="
+[transport.quic]
+keepalivePeriod = $quic_keepalive_period
+maxIdleTimeout = $quic_max_idle_timeout
+maxIncomingStreams = $quic_max_incoming_streams
+"
+      print_success "QUIC enabled and will use the main listen port ($quic_bind_port) with specified settings."
+      ;;
+    *)
+      echo -e "${PROMPT_COLOR}UDP acceleration disabled.${RESET}"
+      ;;
+  esac
+  echo ""
+
+  local udp_packet_size="1500"
+  echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter UDP packet size (udpPacketSize) (default: 1500):${RESET} "
+  read -p "" udp_packet_size_input
+  udp_packet_size=${udp_packet_size_input:-1500}
+  print_success "UDP packet size set to: $udp_packet_size"
+  echo ""
+
   local token
   while true; do
     echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter authentication token (e.g., mysecrettoken123):${RESET} "
@@ -650,11 +704,21 @@ key_file = \"$tls_key_file\""
 bind_port = $listen_port
 token = "$token"
 tls_enable = $tls_enabled
+udpPacketSize = $udp_packet_size
 $tls_config_toml
 log_file = "/var/log/frps-$server_name.log"
 log_level = "info"
 log_max_days = 3
 EOF
+
+  if [[ -n "$kcp_bind_port" ]]; then
+    echo "kcpBindPort = $kcp_bind_port" >> "$config_file_path"
+  fi
+
+  if [[ -n "$quic_bind_port" ]]; then
+    echo "quicBindPort = $quic_bind_port" >> "$config_file_path"
+    echo "$quic_config_toml" >> "$config_file_path"
+  fi
 
   if [[ -n "$dashboard_port" ]]; then
     cat <<EOF >> "$config_file_path"
@@ -708,51 +772,39 @@ EOF
   read -p ""
 }
 
-# Function to parse a TOML file and return common section and proxies
-# Usage: parse_frpc_toml <config_file_path>
-# Returns: common_section_content (global variable), proxy_array (global array)
-parse_frpc_toml() {
+# Helper function to read frpc TOML config and separate common and proxy sections
+# Returns: common_config (string), proxies_array (indexed array of strings, each being a full proxy block)
+read_frpc_config() {
     local config_file="$1"
-    common_section_content=""
-    proxy_array=()
-    local in_common=false
-    local in_proxy=false
+    local -n common_config_ref=$2 # Nameref for common config string
+    local -n proxies_array_ref=$3 # Nameref for proxies array
+
+    common_config_ref=""
+    proxies_array_ref=()
+    local in_common=true
     local current_proxy_block=""
-    local proxy_index=0
 
     while IFS= read -r line || [[ -n "$line" ]]; do
-        # Trim leading/trailing whitespace from the line
         local trimmed_line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
         if [[ "$trimmed_line" =~ ^\[common\] ]]; then
             in_common=true
-            in_proxy=false
             continue
-        elif [[ "$trimmed_line" =~ ^\[\[proxies\]\] ]]; then
+        elif [[ "$trimmed_line" =~ ^\[.*\] ]]; then # Start of any other section (a proxy)
             if [ -n "$current_proxy_block" ]; then
-                proxy_array[proxy_index]="$current_proxy_block"
-                proxy_index=$((proxy_index+1))
+                proxies_array_ref+=("$current_proxy_block")
             fi
-            current_proxy_block="[[proxies]]" # Start new block clean
+            current_proxy_block="$trimmed_line" # Start with the new section header
             in_common=false
-            in_proxy=true
             continue
-        elif [[ "$trimmed_line" =~ ^\[.*\] ]]; then # Another section starts
-            if [ -n "$current_proxy_block" ]; then
-                proxy_array[proxy_index]="$current_proxy_block"
-                proxy_index=$((proxy_index+1))
-            fi
-            current_proxy_block=""
-            in_common=false
-            in_proxy=false
         fi
 
         if "$in_common"; then
-            if [ -n "$trimmed_line" ] && ! [[ "$trimmed_line" =~ ^\[common\] ]]; then # Avoid adding empty lines or the [common] header itself
-                common_section_content+="$trimmed_line"$'\n'
+            if [ -n "$trimmed_line" ]; then
+                common_config_ref+="$trimmed_line"$'\n'
             fi
-        elif "$in_proxy"; then
-            if [ -n "$trimmed_line" ] && ! [[ "$trimmed_line" =~ ^\[\[proxies\]\] ]]; then # Avoid adding empty lines or the [[proxies]] header itself
+        else # In a proxy section
+            if [ -n "$trimmed_line" ]; then
                 current_proxy_block+=$'\n'"$trimmed_line"
             fi
         fi
@@ -760,21 +812,24 @@ parse_frpc_toml() {
 
     # Add the last proxy block if it exists
     if [ -n "$current_proxy_block" ]; then
-        proxy_array[proxy_index]="$current_proxy_block"
+        proxies_array_ref+=("$current_proxy_block")
     fi
 }
 
-
-# Function to reconstruct and save the TOML file
-# Usage: reconstruct_frpc_toml <config_file_path> <common_section_content> <proxy_array>
-reconstruct_frpc_toml() {
+# Helper function to write frpc TOML config
+write_frpc_config() {
     local config_file="$1"
-    local common_content="$2"
-    local -n proxies_ref=$3 # Use nameref for array
+    local common_config="$2"
+    local -n proxies_array_ref=$3 # Nameref for proxies array
 
-    echo "$common_content" > "$config_file"
-    for proxy_block in "${proxies_ref[@]}"; do
-        echo -e "\n$proxy_block" >> "$config_file"
+    echo "# frpc-$(basename "$config_file" | sed 's/frpc-//;s/\.toml//').toml" > "$config_file"
+    echo "" >> "$config_file" # Add a newline after the comment
+    echo "[common]" >> "$config_file"
+    echo "$common_config" >> "$config_file"
+
+    for proxy_block in "${proxies_array_ref[@]}"; do
+        echo "" >> "$config_file" # Add a newline before each proxy block
+        echo "$proxy_block" >> "$config_file"
     done
 }
 
@@ -852,6 +907,13 @@ add_new_frpulse_client_action() {
   done
   echo ""
 
+  local udp_packet_size="1500"
+  echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter UDP packet size (udpPacketSize) (default: 1500):${RESET} "
+  read -p "" udp_packet_size_input
+  udp_packet_size=${udp_packet_size_input:-1500}
+  print_success "UDP packet size set to: $udp_packet_size"
+  echo ""
+
   local token
   while true; do
     echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter authentication token for the FRPulse server:${RESET} "
@@ -876,6 +938,23 @@ add_new_frpulse_client_action() {
   else
     echo -e "${SUCCESS_COLOR}Client TLS enabled (connecting to TLS-enabled server).${RESET}"
   fi
+  echo ""
+
+  # New: Ask for tunnel protocol
+  local tunnel_protocol="tcp" # Default protocol
+  echo -e "👉 ${DEFAULT_TEXT_COLOR}Select tunnel protocol (1) TCP, (2) KCP, (3) QUIC, (4) WebSocket, (5) WSS (default: 1):${RESET} "
+  read -p "" protocol_choice_tunnel
+  protocol_choice_tunnel=${protocol_choice_tunnel:-1}
+
+  case "$protocol_choice_tunnel" in
+    1) tunnel_protocol="tcp" ;;
+    2) tunnel_protocol="kcp" ;;
+    3) tunnel_protocol="quic" ;;
+    4) tunnel_protocol="websocket" ;;
+    5) tunnel_protocol="wss" ;;
+    *) tunnel_protocol="tcp" ; print_error "Invalid choice. Defaulting to TCP." ;;
+  esac
+  print_success "Tunnel protocol set to: $tunnel_protocol"
   echo ""
 
   local proxy_configs_toml=""
@@ -918,7 +997,7 @@ add_new_frpulse_client_action() {
 
     local protocol_choice
     local protocol_type
-    echo -e "👉 ${DEFAULT_TEXT_COLOR}Select protocol (1) TCP, (2) UDP, (3) HTTP, (4) HTTPS (default: 1):${RESET} "
+    echo -e "👉 ${DEFAULT_TEXT_COLOR}Select proxy type (1) TCP, (2) UDP, (3) HTTP, (4) HTTPS (default: 1):${RESET} "
     read -p "" protocol_choice
     protocol_choice=${protocol_choice:-1}
 
@@ -930,8 +1009,9 @@ add_new_frpulse_client_action() {
       *) protocol_type="tcp" ; print_error "Invalid choice. Defaulting to TCP." ;;
     esac
 
+    # Modified section to use [protocol_name] instead of [[proxies]]
     proxy_configs_toml+="
-[[proxies]]
+[${protocol_type}_${client_name}_${proxy_counter}]
 name = \"${protocol_type}_${client_name}_${proxy_counter}\"
 type = \"${protocol_type}\"
 "
@@ -972,9 +1052,11 @@ server_addr = "$server_address"
 server_port = $server_port
 token = "$token"
 tls_enable = $client_tls_enabled
+udpPacketSize = $udp_packet_size
 log_file = "/var/log/frpc-$client_name.log"
 log_level = "info"
 log_max_days = 3
+transport.protocol = "$tunnel_protocol"
 $proxy_configs_toml
 EOF
   print_success "frpc-$client_name.toml successfully created at $config_file_path."
@@ -1202,6 +1284,503 @@ certificate_management_menu() {
   done
 }
 
+# New function to show FRP dashboard information
+show_frps_dashboard_info_action() {
+  clear
+  echo ""
+  draw_line "${INFO_COLOR}" "=" 40
+  echo -e "${INFO_COLOR}     📊 Show FRP Dashboard Info${RESET}"
+  draw_line "${INFO_COLOR}" "=" 40
+  echo ""
+
+  echo -e "${INFO_COLOR}🔍 Searching for FRPulse servers...${RESET}"
+  mapfile -t services < <(systemctl list-units --type=service --all | grep 'frpulse-server-' | awk '{print $1}' | sed 's/.service$//')
+
+  if [ ${#services[@]} -eq 0 ]; then
+    echo -e "${ERROR_COLOR}❌ No FRPulse servers found.${RESET}"
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
+    read -p ""
+    return
+  fi
+
+  echo -e "${INFO_COLOR}📋 Please select a server to view its dashboard info:${RESET}"
+  services+=("Back to Previous Menu")
+  select selected_service in "${services[@]}"; do
+    if [[ "$selected_service" == "Back to Previous Menu" ]]; then
+      echo -e "${PROMPT_COLOR}Returning to previous menu...${RESET}"
+      echo ""
+      return
+    elif [ -n "$selected_service" ]; then
+      break
+    else
+      echo -e "${ERROR_COLOR}⚠️ Invalid choice. Please enter a valid number.${RESET}"
+    fi
+  done
+  echo ""
+
+  local server_name_only=$(echo "$selected_service" | sed 's/frpulse-server-//')
+  local config_file_path="$(pwd)/frpulse/frps-$server_name_only.toml"
+
+  if [ ! -f "$config_file_path" ]; then
+    print_error "❌ Configuration file not found for $selected_service: $config_file_path"
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
+    read -p ""
+    return
+  fi
+
+  local dashboard_port=$(grep -E '^dashboard_port' "$config_file_path" | awk '{print $3}' | tr -d '\r')
+  local dashboard_user=$(grep -E '^dashboard_user' "$config_file_path" | awk '{print $3}' | tr -d '"\r')
+  local dashboard_pwd=$(grep -E '^dashboard_pwd' "$config_file_path" | awk '{print $3}' | tr -d '"\r')
+
+  echo ""
+  draw_line "${INFO_COLOR}" "=" 40
+  echo -e "${INFO_COLOR}     Dashboard Info for ${BOLD_HIGHLIGHT}$server_name_only${RESET}${INFO_COLOR}${RESET}"
+  draw_line "${INFO_COLOR}" "=" 40
+  echo ""
+
+  if [[ -n "$dashboard_port" ]]; then
+    echo -e "${DEFAULT_TEXT_COLOR}Your dashboard info is :${RESET}"
+    echo -e "${DEFAULT_TEXT_COLOR}Port : ${PROMPT_COLOR}$dashboard_port${RESET}"
+    echo -e "${DEFAULT_TEXT_COLOR}User : ${PROMPT_COLOR}$dashboard_user${RESET}"
+    echo -e "${DEFAULT_TEXT_COLOR}Password : ${PROMPT_COLOR}$dashboard_pwd${RESET}"
+  else
+    print_error "❌ Dashboard is not enabled for this server, or information is missing."
+  fi
+
+  echo ""
+  echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
+  read -p ""
+}
+
+# New function to manage client ports
+manage_client_ports_action() {
+  clear
+  echo ""
+  draw_line "${INFO_COLOR}" "=" 40
+  echo -e "${INFO_COLOR}     ⚙️ Manage Client Ports${RESET}"
+  draw_line "${INFO_COLOR}" "=" 40
+  echo ""
+
+  echo -e "${INFO_COLOR}🔍 Searching for FRPulse clients...${RESET}"
+  mapfile -t clients < <(systemctl list-units --type=service --all | grep 'frpulse-client-' | awk '{print $1}' | sed 's/.service$//')
+
+  if [ ${#clients[@]} -eq 0 ]; then
+    echo -e "${ERROR_COLOR}❌ No FRPulse clients found.${RESET}"
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
+    read -p ""
+    return
+  fi
+
+  echo -e "${INFO_COLOR}📋 Please select a client to manage its ports:${RESET}"
+  clients+=("Back to Previous Menu")
+  select selected_client_service in "${clients[@]}"; do
+    if [[ "$selected_client_service" == "Back to Previous Menu" ]]; then
+      echo -e "${PROMPT_COLOR}Returning to previous menu...${RESET}"
+      echo ""
+      return
+    elif [ -n "$selected_client_service" ]; then
+      break
+    else
+      echo -e "${ERROR_COLOR}⚠️ Invalid choice. Please enter a valid number.${RESET}"
+    fi
+  done
+  echo ""
+
+  local client_name_only=$(echo "$selected_client_service" | sed 's/frpulse-client-//')
+  local config_file_path="$(pwd)/frpulse/frpc-$client_name_only.toml"
+
+  if [ ! -f "$config_file_path" ]; then
+    print_error "❌ Configuration file not found for $selected_client_service: $config_file_path"
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
+    read -p ""
+    return
+  fi
+
+  # Sub-menu for port management
+  while true; do
+    clear
+    echo ""
+    draw_line "${INFO_COLOR}" "=" 40
+    echo -e "${INFO_COLOR}     Port Management for ${BOLD_HIGHLIGHT}$client_name_only${RESET}${INFO_COLOR}${RESET}"
+    draw_line "${INFO_COLOR}" "=" 40
+    echo ""
+    echo -e "  ${SUB_MENU_OPTION_COLOR}1)${RESET} ${DEFAULT_TEXT_COLOR}View Tunneled Ports${RESET}"
+    echo -e "  ${SUB_MENU_OPTION_COLOR}2)${RESET} ${DEFAULT_TEXT_COLOR}Add New Tunneled Port${RESET}"
+    echo -e "  ${SUB_MENU_OPTION_COLOR}3)${RESET} ${DEFAULT_TEXT_COLOR}Edit Tunneled Port${RESET}"
+    echo -e "  ${SUB_MENU_OPTION_COLOR}4)${RESET} ${DEFAULT_TEXT_COLOR}Delete Tunneled Port${RESET}"
+    echo -e "  ${SUB_MENU_OPTION_COLOR}5)${RESET} ${DEFAULT_TEXT_COLOR}Back to Client Selection${RESET}"
+    echo ""
+    draw_line "${INFO_COLOR}" "-" 40
+    echo -e "👉 ${INFO_COLOR}Your choice:${RESET} "
+    read -p "" port_management_choice
+    echo ""
+
+    case $port_management_choice in
+      1)
+        view_tunneled_ports "$config_file_path"
+        ;;
+      2)
+        add_tunneled_port "$config_file_path" "$client_name_only"
+        ;;
+      3)
+        edit_tunneled_port "$config_file_path" "$client_name_only"
+        ;;
+      4)
+        delete_tunneled_port "$config_file_path" "$client_name_only"
+        ;;
+      5)
+        echo -e "${PROMPT_COLOR}Returning to client selection...${RESET}"
+        break # Break out of this while loop to return to client selection
+        ;;
+      *)
+        echo -e "${ERROR_COLOR}❌ Invalid option.${RESET}"
+        echo ""
+        echo -e "${PROMPT_COLOR}Press Enter to continue...${RESET}"
+        read -p ""
+        ;;
+    esac
+  done
+}
+
+# Function to view tunneled ports
+view_tunneled_ports() {
+  local config_file_path="$1"
+  local common_config_content
+  local -a current_proxies
+
+  read_frpc_config "$config_file_path" common_config_content current_proxies
+
+  clear
+  echo ""
+  draw_line "${INFO_COLOR}" "=" 40
+  echo -e "${INFO_COLOR}     📋 Current Tunneled Ports${RESET}"
+  draw_line "${INFO_COLOR}" "=" 40
+  echo ""
+
+  if [ ${#current_proxies[@]} -eq 0 ]; then
+    echo -e "${INFO_COLOR}No tunneled ports configured for this client.${RESET}"
+  else
+    for i in "${!current_proxies[@]}"; do
+      local proxy_block="${current_proxies[$i]}"
+      local name=$(echo "$proxy_block" | grep -E '^name =' | awk -F'=' '{print $2}' | tr -d ' "')
+      local type=$(echo "$proxy_block" | grep -E '^type =' | awk -F'=' '{print $2}' | tr -d ' "')
+      local local_port=$(echo "$proxy_block" | grep -E '^local_port =' | awk -F'=' '{print $2}' | tr -d ' ')
+      local remote_port=$(echo "$proxy_block" | grep -E '^remote_port =' | awk -F'=' '{print $2}' | tr -d ' ')
+      local custom_domains=$(echo "$proxy_block" | grep -E '^custom_domains =' | sed -E 's/custom_domains = \[?"?([^]]*)"?\]?/\1/' | tr -d ' "')
+
+      echo -e "${BOLD_HIGHLIGHT}$((i+1))). Name: ${name:-N/A}${RESET}"
+      echo -e "   Type: ${type:-N/A}"
+      echo -e "   Local Port: ${local_port:-N/A}"
+      echo -e "   Remote Port: ${remote_port:-N/A}"
+      if [[ -n "$custom_domains" ]]; then
+        echo -e "   Custom Domains: ${custom_domains}"
+      fi
+      echo ""
+    done
+  fi
+
+  echo -e "${PROMPT_COLOR}Press Enter to return to the port management menu...${RESET}"
+  read -p ""
+}
+
+# Function to add a new tunneled port
+add_tunneled_port() {
+  local config_file_path="$1"
+  local client_name_only="$2"
+  local common_config_content
+  local -a current_proxies
+
+  read_frpc_config "$config_file_path" common_config_content current_proxies
+
+  clear
+  echo ""
+  draw_line "${INFO_COLOR}" "=" 40
+  echo -e "${INFO_COLOR}     ➕ Add New Tunneled Port${RESET}"
+  draw_line "${INFO_COLOR}" "=" 40
+  echo ""
+
+  local local_port
+  while true; do
+    echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter local port (e.g., 8080):${RESET} "
+    read -p "" local_port_input
+    if validate_port "$local_port_input"; then
+      local_port="$local_port_input"
+      break
+    else
+      print_error "Invalid port number. Please enter a number between 1 and 65535."
+    fi
+  done
+
+  local remote_port
+  while true; do
+    echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter remote port (e.g., 80):${RESET} "
+    read -p "" remote_port_input
+    if validate_port "$remote_port_input"; then
+      remote_port="$remote_port_input"
+      break
+    else
+      print_error "Invalid port number. Please enter a number between 1 and 65535."
+    fi
+  done
+
+  local protocol_choice
+  local protocol_type
+  echo -e "👉 ${DEFAULT_TEXT_COLOR}Select proxy type (1) TCP, (2) UDP, (3) HTTP, (4) HTTPS (default: 1):${RESET} "
+  read -p "" protocol_choice
+  protocol_choice=${protocol_choice:-1}
+
+  case "$protocol_choice" in
+    1) protocol_type="tcp" ;;
+    2) protocol_type="udp" ;;
+    3) protocol_type="http" ;;
+    4) protocol_type="https" ;;
+    *) protocol_type="tcp" ; print_error "Invalid choice. Defaulting to TCP." ;;
+  esac
+
+  local new_proxy_counter=$(( ${#current_proxies[@]} + 1 ))
+  local proxy_name="${protocol_type}_${client_name_only}_${new_proxy_counter}"
+  
+  local new_proxy_block="[${proxy_name}]
+name = \"${proxy_name}\"
+type = \"${protocol_type}\"
+"
+  if [[ "$protocol_type" == "tcp" || "$protocol_type" == "udp" ]]; then
+    new_proxy_block+="local_ip = \"127.0.0.1\""$'\n'
+  fi
+  new_proxy_block+="local_port = ${local_port}"$'\n'
+  new_proxy_block+="remote_port = ${remote_port}"$'\n'
+
+  if [[ "$protocol_type" == "http" || "$protocol_type" == "https" ]]; then
+    local custom_domain
+    echo -e "👉 ${DEFAULT_TEXT_COLOR}Custom domain name for this HTTP/HTTPS proxy (optional, e.g., sub.yourdomain.com):${RESET} "
+    read -p "" custom_domain
+    if [[ -n "$custom_domain" ]]; then
+      new_proxy_block+="custom_domains = [\"${custom_domain}\"]"
+    fi
+  fi
+
+  current_proxies+=("$new_proxy_block")
+  write_frpc_config "$config_file_path" "$common_config_content" current_proxies
+
+  sudo systemctl restart "frpulse-client-$client_name_only" > /dev/null 2>&1
+  print_success "New tunneled port added and client service restarted."
+
+  echo ""
+  echo -e "${PROMPT_COLOR}Press Enter to return to the port management menu...${RESET}"
+  read -p ""
+}
+
+# Function to delete a tunneled port
+delete_tunneled_port() {
+  local config_file_path="$1"
+  local client_name_only="$2"
+  local common_config_content
+  local -a current_proxies
+
+  read_frpc_config "$config_file_path" common_config_content current_proxies
+
+  clear
+  echo ""
+  draw_line "${INFO_COLOR}" "=" 40
+  echo -e "${INFO_COLOR}     🗑️ Delete Tunneled Port${RESET}"
+  draw_line "${INFO_COLOR}" "=" 40
+  echo ""
+
+  if [ ${#current_proxies[@]} -eq 0 ]; then
+    echo -e "${INFO_COLOR}No tunneled ports to delete for this client.${RESET}"
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to return to the port management menu...${RESET}"
+    read -p ""
+    return
+  fi
+
+  echo -e "${INFO_COLOR}📋 Select the port to delete:${RESET}"
+  for i in "${!current_proxies[@]}"; do
+    local proxy_block="${current_proxies[$i]}"
+    local name=$(echo "$proxy_block" | grep -E '^name =' | awk -F'=' '{print $2}' | tr -d ' "')
+    echo -e "  ${PROMPT_COLOR}$((i+1)))${RESET} ${DEFAULT_TEXT_COLOR}${name:-N/A}${RESET}"
+  done
+  echo -e "  ${PROMPT_COLOR}$(( ${#current_proxies[@]} + 1 )))${RESET} ${DEFAULT_TEXT_COLOR}Back to Port Management Menu${RESET}"
+  echo ""
+
+  local delete_choice
+  while true; do
+    echo -e "👉 ${INFO_COLOR}Enter your choice:${RESET} "
+    read -p "" delete_choice
+    if [[ "$delete_choice" =~ ^[0-9]+$ ]] && [ "$delete_choice" -ge 1 ] && [ "$delete_choice" -le $(( ${#current_proxies[@]} + 1 )) ]; then
+      break
+    else
+      print_error "Invalid choice. Please enter a valid number."
+    fi
+  done
+
+  if [ "$delete_choice" -eq $(( ${#current_proxies[@]} + 1 )) ]; then
+    echo -e "${PROMPT_COLOR}Deletion cancelled. Returning to port management menu...${RESET}"
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to continue...${RESET}"
+    read -p ""
+    return
+  fi
+
+  local index_to_delete=$((delete_choice - 1))
+  local deleted_proxy_name=$(echo "${current_proxies[$index_to_delete]}" | grep -E '^name =' | awk -F'=' '{print $2}' | tr -d ' "')
+
+  unset 'current_proxies[index_to_delete]'
+  current_proxies=("${current_proxies[@]}") # Re-index the array
+
+  write_frpc_config "$config_file_path" "$common_config_content" current_proxies
+
+  sudo systemctl restart "frpulse-client-$client_name_only" > /dev/null 2>&1
+  print_success "Tunneled port '$deleted_proxy_name' deleted and client service restarted."
+
+  echo ""
+  echo -e "${PROMPT_COLOR}Press Enter to return to the port management menu...${RESET}"
+  read -p ""
+}
+
+# Function to edit a tunneled port
+edit_tunneled_port() {
+  local config_file_path="$1"
+  local client_name_only="$2"
+  local common_config_content
+  local -a current_proxies
+
+  read_frpc_config "$config_file_path" common_config_content current_proxies
+
+  clear
+  echo ""
+  draw_line "${INFO_COLOR}" "=" 40
+  echo -e "${INFO_COLOR}     ✏️ Edit Tunneled Port${RESET}"
+  draw_line "${INFO_COLOR}" "=" 40
+  echo ""
+
+  if [ ${#current_proxies[@]} -eq 0 ]; then
+    echo -e "${INFO_COLOR}No tunneled ports to edit for this client.${RESET}"
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to return to the port management menu...${RESET}"
+    read -p ""
+    return
+  fi
+
+  echo -e "${INFO_COLOR}📋 Select the port to edit:${RESET}"
+  for i in "${!current_proxies[@]}"; do
+    local proxy_block="${current_proxies[$i]}"
+    local name=$(echo "$proxy_block" | grep -E '^name =' | awk -F'=' '{print $2}' | tr -d ' "')
+    echo -e "  ${PROMPT_COLOR}$((i+1)))${RESET} ${DEFAULT_TEXT_COLOR}${name:-N/A}${RESET}"
+  done
+  echo -e "  ${PROMPT_COLOR}$(( ${#current_proxies[@]} + 1 )))${RESET} ${DEFAULT_TEXT_COLOR}Back to Port Management Menu${RESET}"
+  echo ""
+
+  local edit_choice
+  while true; do
+    echo -e "👉 ${INFO_COLOR}Enter your choice:${RESET} "
+    read -p "" edit_choice
+    if [[ "$edit_choice" =~ ^[0-9]+$ ]] && [ "$edit_choice" -ge 1 ] && [ "$edit_choice" -le $(( ${#current_proxies[@]} + 1 )) ]; then
+      break
+    else
+      print_error "Invalid choice. Please enter a valid number."
+    fi
+  done
+
+  if [ "$edit_choice" -eq $(( ${#current_proxies[@]} + 1 )) ]; then
+    echo -e "${PROMPT_COLOR}Edit cancelled. Returning to port management menu...${RESET}"
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to continue...${RESET}"
+    read -p ""
+    return
+  fi
+
+  local index_to_edit=$((edit_choice - 1))
+  local original_proxy_block="${current_proxies[$index_to_edit]}"
+
+  local current_name=$(echo "$original_proxy_block" | grep -E '^name =' | awk -F'=' '{print $2}' | tr -d ' "')
+  local current_type=$(echo "$original_proxy_block" | grep -E '^type =' | awk -F'=' '{print $2}' | tr -d ' "')
+  local current_local_port=$(echo "$original_proxy_block" | grep -E '^local_port =' | awk -F'=' '{print $2}' | tr -d ' ')
+  local current_remote_port=$(echo "$original_proxy_block" | grep -E '^remote_port =' | awk -F'=' '{print $2}' | tr -d ' ')
+  local current_custom_domains=$(echo "$original_proxy_block" | grep -E '^custom_domains =' | sed -E 's/custom_domains = \[?"?([^]]*)"?\]?/\1/' | tr -d ' "')
+
+  echo -e "${INFO_COLOR}Editing port: ${BOLD_HIGHLIGHT}$current_name${RESET}"
+  echo ""
+
+  local new_local_port
+  while true; do
+    echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter new local port (current: $current_local_port, press Enter for no change):${RESET} "
+    read -p "" new_local_port_input
+    new_local_port=${new_local_port_input:-$current_local_port}
+    if validate_port "$new_local_port"; then
+      break
+    else
+      print_error "Invalid port number. Please enter a number between 1 and 65535."
+    fi
+  done
+
+  local new_remote_port
+  while true; do
+    echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter new remote port (current: $current_remote_port, press Enter for no change):${RESET} "
+    read -p "" new_remote_port_input
+    new_remote_port=${new_remote_port_input:-$current_remote_port}
+    if validate_port "$new_remote_port"; then
+      break
+    else
+      print_error "Invalid port number. Please enter a number between 1 and 65535."
+    fi
+  done
+
+  local new_protocol_choice
+  local new_protocol_type="$current_type" # Default to current type
+  echo -e "👉 ${DEFAULT_TEXT_COLOR}Select new proxy type (1) TCP, (2) UDP, (3) HTTP, (4) HTTPS (current: $current_type, press Enter for no change):${RESET} "
+  read -p "" new_protocol_choice
+  if [[ -n "$new_protocol_choice" ]]; then
+    case "$new_protocol_choice" in
+      1) new_protocol_type="tcp" ;;
+      2) new_protocol_type="udp" ;;
+      3) new_protocol_type="http" ;;
+      4) new_protocol_type="https" ;;
+      *) new_protocol_type="$current_type" ; print_error "Invalid choice. Keeping current type." ;;
+    esac
+  fi
+
+  local new_custom_domain="$current_custom_domains"
+  if [[ "$new_protocol_type" == "http" || "$new_protocol_type" == "https" ]]; then
+    echo -e "👉 ${DEFAULT_TEXT_COLOR}Enter new custom domain name (current: $current_custom_domains, press Enter for no change, or 'none' to remove):${RESET} "
+    read -p "" new_custom_domain_input
+    if [[ "$new_custom_domain_input" == "none" ]]; then
+      new_custom_domain=""
+    elif [[ -n "$new_custom_domain_input" ]]; then
+      new_custom_domain="$new_custom_domain_input"
+    fi
+  else
+    new_custom_domain="" # Clear custom domain if protocol is not HTTP/HTTPS
+  fi
+
+  local updated_proxy_block="[${current_name}]
+name = \"${current_name}\"
+type = \"${new_protocol_type}\"
+"
+  if [[ "$new_protocol_type" == "tcp" || "$new_protocol_type" == "udp" ]]; then
+    updated_proxy_block+="local_ip = \"127.0.0.1\""$'\n'
+  fi
+  updated_proxy_block+="local_port = ${new_local_port}"$'\n'
+  updated_proxy_block+="remote_port = ${new_remote_port}"$'\n'
+
+  if [[ -n "$new_custom_domain" ]]; then
+    updated_proxy_block+="custom_domains = [\"${new_custom_domain}\"]"
+  fi
+
+  current_proxies[$index_to_edit]="$updated_proxy_block"
+  write_frpc_config "$config_file_path" "$common_config_content" current_proxies
+
+  sudo systemctl restart "frpulse-client-$client_name_only" > /dev/null 2>&1
+  print_success "Tunneled port '$current_name' updated and client service restarted."
+
+  echo ""
+  echo -e "${PROMPT_COLOR}Press Enter to return to the port management menu...${RESET}"
+  read -p ""
+}
 
 # --- Main Script Execution ---
 set -e # Exit immediately if a command exits with a non-zero status
@@ -1282,11 +1861,12 @@ while true; do
               draw_line "${INFO_COLOR}" "=" 40
               echo ""
               echo -e "  ${SUB_MENU_OPTION_COLOR}1)${RESET} ${DEFAULT_TEXT_COLOR}Add New FRPulse Server${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}2)${RESET} ${DEFAULT_TEXT_COLOR}View FRPulse Server Logs${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}3)${RESET} ${DEFAULT_TEXT_COLOR}Delete an FRPulse Server${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}4)${RESET} ${DEFAULT_TEXT_COLOR}Schedule FRPulse Server Restart${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}5)${RESET} ${DEFAULT_TEXT_COLOR}Delete Scheduled Restart${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}6)${RESET} ${DEFAULT_TEXT_COLOR}Back to Previous Menu${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}2)${RESET} ${DEFAULT_TEXT_COLOR}Show FRP Dashboard Info${RESET}" # New option
+              echo -e "  ${SUB_MENU_OPTION_COLOR}3)${RESET} ${DEFAULT_TEXT_COLOR}View FRPulse Server Logs${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}4)${RESET} ${DEFAULT_TEXT_COLOR}Delete an FRPulse Server${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}5)${RESET} ${DEFAULT_TEXT_COLOR}Schedule FRPulse Server Restart${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}6)${RESET} ${DEFAULT_TEXT_COLOR}Delete Scheduled Restart${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}7)${RESET} ${DEFAULT_TEXT_COLOR}Back to Previous Menu${RESET}"
               echo ""
               draw_line "${INFO_COLOR}" "-" 40
               echo -e "👉 ${INFO_COLOR}Your choice:${RESET} "
@@ -1297,7 +1877,10 @@ while true; do
                 1)
                   add_new_frpulse_server_action
                   ;;
-                2)
+                2) # New case for dashboard info
+                  show_frps_dashboard_info_action
+                  ;;
+                3)
                   clear
                   echo ""
                   draw_line "${INFO_COLOR}" "=" 40
@@ -1328,7 +1911,7 @@ while true; do
                   echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
                   read -p ""
                   ;;
-                3)
+                4)
                   clear
                   echo ""
                   draw_line "${INFO_COLOR}" "=" 40
@@ -1354,7 +1937,7 @@ while true; do
                         echo -e "${PROMPT_COLOR}🛑 Stopping $selected_service...${RESET}"
                         sudo systemctl stop "$selected_service" > /dev/null 2>&1
                         sudo systemctl disable "$selected_service" > /dev/null 2>&1
-                        sudo rm -f "/etc/systemd/system/$service_file" > /dev/null 2>&1
+                        sudo rm -f "$service_file" > /dev/null 2>&1 
                         sudo systemctl daemon-reload > /dev/null 2>&1
                         print_success "FRPulse server '$selected_service' deleted."
                         
@@ -1371,7 +1954,7 @@ while true; do
                         print_success "Cron jobs for '$selected_service' deleted."
                         break
                       else
-                        echo -e "${ERROR_COLOR}⚠️ Invalid choice. Please enter a valid number.${RESET}"
+                        echo -e "${ERROR_ERROR}⚠️ Invalid choice. Please enter a valid number.${RESET}"
                       fi
                     done
                   fi
@@ -1379,7 +1962,7 @@ while true; do
                   echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
                   read -p ""
                   ;;
-                4) # Schedule FRPulse server restart
+                5) # Schedule FRPulse server restart
                   clear
                   echo ""
                   draw_line "${INFO_COLOR}" "=" 40
@@ -1410,10 +1993,10 @@ while true; do
                     done
                   fi
                   ;;
-                5)
+                6)
                   delete_cron_job_action
                   ;;
-                6)
+                7)
                   echo -e "${PROMPT_COLOR}Returning to previous menu...${RESET}"
                   break # Break out of this while loop to return to FRPulse Tunnel Management
                   ;;
@@ -1435,11 +2018,12 @@ while true; do
               draw_line "${INFO_COLOR}" "=" 40
               echo ""
               echo -e "  ${SUB_MENU_OPTION_COLOR}1)${RESET} ${DEFAULT_TEXT_COLOR}Add New FRPulse Client${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}2)${RESET} ${DEFAULT_TEXT_COLOR}View FRPulse Client Logs${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}3)${RESET} ${DEFAULT_TEXT_COLOR}Delete an FRPulse Client${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}4)${RESET} ${DEFAULT_TEXT_COLOR}Schedule FRPulse Client Restart${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}5)${RESET} ${DEFAULT_TEXT_COLOR}Delete Scheduled Restart${RESET}"
-              echo -e "  ${SUB_MENU_OPTION_COLOR}6)${RESET} ${DEFAULT_TEXT_COLOR}Back to Previous Menu${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}2)${RESET} ${DEFAULT_TEXT_COLOR}Manage Client Ports${RESET}" # New option
+              echo -e "  ${SUB_MENU_OPTION_COLOR}3)${RESET} ${DEFAULT_TEXT_COLOR}View FRPulse Client Logs${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}4)${RESET} ${DEFAULT_TEXT_COLOR}Delete an FRPulse Client${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}5)${RESET} ${DEFAULT_TEXT_COLOR}Schedule FRPulse Client Restart${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}6)${RESET} ${DEFAULT_TEXT_COLOR}Delete Scheduled Restart${RESET}"
+              echo -e "  ${SUB_MENU_OPTION_COLOR}7)${RESET} ${DEFAULT_TEXT_COLOR}Back to Previous Menu${RESET}"
               echo ""
               draw_line "${INFO_COLOR}" "-" 40
               echo -e "👉 ${INFO_COLOR}Your choice:${RESET} "
@@ -1450,7 +2034,10 @@ while true; do
                 1)
                   add_new_frpulse_client_action
                   ;;
-                2)
+                2) # New case for managing client ports
+                  manage_client_ports_action
+                  ;;
+                3)
                   clear
                   echo ""
                   draw_line "${INFO_COLOR}" "=" 40
@@ -1481,7 +2068,7 @@ while true; do
                   echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
                   read -p ""
                   ;;
-                3)
+                4)
                   clear
                   echo ""
                   draw_line "${INFO_COLOR}" "=" 40
@@ -1532,7 +2119,7 @@ while true; do
                   echo -e "${PROMPT_COLOR}Press Enter to return to the previous menu...${RESET}"
                   read -p ""
                   ;;
-                4) # Schedule FRPulse client restart (shifted from 4)
+                5) # Schedule FRPulse client restart (shifted from 4)
                   clear
                   echo ""
                   draw_line "${INFO_COLOR}" "=" 40
@@ -1563,10 +2150,10 @@ while true; do
                     done
                   fi
                   ;;
-                5) # Delete Scheduled Restart (shifted from 5)
+                6) # Delete Scheduled Restart (shifted from 5)
                   delete_cron_job_action
                   ;;
-                6) # Back to previous menu (shifted from 6)
+                7) # Back to previous menu (shifted from 6)
                   echo -e "${PROMPT_COLOR}Returning to previous menu...${RESET}"
                   break # Break out of this while loop to return to FRPulse Tunnel Management
                   ;;
@@ -1602,10 +2189,9 @@ while true; do
       exit 0
       ;;
     *)
-      echo -e "${ERROR_COLOR}❌ Invalid choice. Exiting.${RESET}"
+      echo -e "${ERROR_ERROR}❌ Invalid choice. Exiting.${RESET}"
       echo ""
       echo -e "${PROMPT_COLOR}Press Enter to continue...${RESET}"
-      read -p ""
     ;;
   esac
   echo ""
