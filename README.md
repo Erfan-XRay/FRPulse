@@ -9,7 +9,7 @@ Run the following script on your server (Debian or Ubuntu):
 bash <(curl -Ls https://raw.githubusercontent.com/Erfan-XRay/FRPulse/main/FRPulse.sh)
 ```
 ## How to use ?
-Video come soon
+[Watch on YouTube](https://www.youtube.com/watch?v=8HT42bQqMD0&t=1s)
 ## ⚙️ Features
 - Add, remove, and manage client/server services
 - Support Ipv4/Ipv6
