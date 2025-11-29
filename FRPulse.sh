@@ -19,7 +19,7 @@ SCRIPT_DIR="$(dirname "$TRUST_SCRIPT_PATH")"
 SETUP_MARKER_FILE="/var/lib/frpulse/.setup_complete"
 
 # --- Script Version ---
-SCRIPT_VERSION="1.4.0" # Define the script version for FRPulse
+SCRIPT_VERSION="1.5.0" # Define the script version for FRPulse
 
 # --- Helper Functions ---
 
@@ -106,6 +106,22 @@ validate_host() {
   else
     return 1 # Invalid
   fi
+}
+
+# Function to detect system architecture
+get_system_arch() {
+  local arch=$(uname -m)
+  case "$arch" in
+    x86_64)
+      echo "amd64"
+      ;;
+    aarch64)
+      echo "arm64"
+      ;;
+    *)
+      echo "unsupported"
+      ;;
+  esac
 }
 
 # Function to generate a random password
@@ -411,11 +427,21 @@ install_frpulse_action() {
 
   echo -e "${INFO_COLOR}Downloading and installing the latest FRP...${RESET}"
 
-  # Find the latest frp release for linux_amd64
-  local frp_latest_release_url=$(curl -s https://api.github.com/repos/fatedier/frp/releases/latest | grep "browser_download_url" | grep "linux_amd64.tar.gz" | cut -d '"' -f 4)
+  local arch=$(get_system_arch)
+  if [[ "$arch" == "unsupported" ]]; then
+    print_error "Unsupported architecture: $(uname -m). Only amd64 and arm64 are supported."
+    echo ""
+    echo -e "${PROMPT_COLOR}Press Enter to return to the main menu...${RESET}"
+    return 1
+  fi
+
+  echo -e "${INFO_COLOR}Detected architecture: ${DEFAULT_TEXT_COLOR}$arch${RESET}"
+
+  # Find the latest frp release for the detected architecture
+  local frp_latest_release_url=$(curl -s https://api.github.com/repos/fatedier/frp/releases/latest | grep "browser_download_url" | grep "linux_${arch}.tar.gz" | cut -d '"' -f 4)
 
   if [ -z "$frp_latest_release_url" ]; then
-    print_error "❌ Error: Could not find the latest FRP download URL. Please check your internet connection."
+    print_error "❌ Error: Could not find the latest FRP download URL for $arch. Please check your internet connection."
     echo ""
     echo -e "${PROMPT_COLOR}Press Enter to return to the main menu...${RESET}"
     return 1
