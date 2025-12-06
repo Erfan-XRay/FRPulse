@@ -20,6 +20,24 @@ SETUP_MARKER_FILE="/var/lib/wgtunnel/.setup_complete"
 # --- Script Version ---
 SCRIPT_VERSION="1.0.0" # Initial release for WGTunnel
 
+# --- OS Detection ---
+check_os() {
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
+      echo -e "\033[0;31m❌ Error: This script only supports Ubuntu and Debian.\033[0m"
+      echo -e "\033[0;33mDetected OS: $PRETTY_NAME\033[0m"
+      exit 1
+    fi
+  else
+    echo -e "\033[0;31m❌ Error: Cannot detect operating system. /etc/os-release not found.\033[0m"
+    exit 1
+  fi
+}
+
+# Run OS check immediately
+check_os
+
 # --- Helper Functions ---
 
 # Function to draw a colored line for menu separation
