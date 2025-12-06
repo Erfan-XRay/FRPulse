@@ -849,98 +849,6 @@ perform_initial_setup || { echo "Initial setup failed. Exiting."; exit 1; }
 # Removed Rust readiness check as it's no longer installed by this script's initial setup.
 # The Hysteria installation script is responsible for its own dependencies.
 
-while true; do
-  # Clear terminal and show logo
-  clear
-  echo -e "${CYAN}"
-  figlet -f slant "WGTunnel"
-  echo -e "${CYAN}"
-  draw_line "$CYAN" "=" 80 # Decorative line
-  echo ""
-  echo -e "Developed by ErfanXRay => ${BOLD_GREEN}https://github.com/Erfan-XRay/HPulse${RESET}"
-  echo -e "Telegram Channel => ${BOLD_GREEN}@Erfan_XRay${RESET}"
-  echo -e "Tunnel script for ${CYAN}WireGuard & OpenVPN${RESET} (Backhaul UDP)"
-  echo ""
-  # Get server IP addresses
-  SERVER_IPV4=$(hostname -I | awk '{print $1}')
-  # SERVER_IPV6=$(hostname -I | awk '{print $2}') # This might be empty if no IPv6
-
-
-  draw_line "$CYAN" "=" 40 # Decorative line
-  echo -e "${CYAN}     🌐 Server Information${RESET}"
-  draw_line "$CYAN" "=" 40 # Decorative line
-  echo -e "  ${WHITE}IPv4 Address: ${YELLOW}$SERVER_IPV4${RESET}"
-  echo -e "  ${WHITE}Backhaul Status: $(check_backhaul_installation_status)${RESET}"
-  echo -e "  ${WHITE}Script Version: ${YELLOW}$SCRIPT_VERSION${RESET}"
-  draw_line "$CYAN" "=" 40 # Decorative line
-  echo "" # Added for spacing
-
-  # Menu
-  echo "Select an option:"
-  echo ""
-  echo -e "${MAGENTA}1) Install Backhaul (UDP Tunnel)${RESET}"
-  echo -e "${CYAN}2) Backhaul tunnel management${RESET}"
-  echo -e "${RED}3) Uninstall WGTunnel and cleanup${RESET}"
-  echo -e "${WHITE}4) Exit${RESET}"
-  echo ""
-  read -p "👉 Your choice: " choice
-
-  case $choice in
-    1)
-      install_backhaul_action
-      ;;
-    2) # Backhaul tunnel management
-      while true; do
-        clear
-        echo ""
-        draw_line "$CYAN" "=" 40
-        echo -e "${CYAN}     🌐 Backhaul Tunnel Management${RESET}"
-        draw_line "$CYAN" "=" 40
-        echo ""
-        echo -e "  ${YELLOW}1)${RESET} ${MAGENTA}Add Backhaul Server${RESET}"
-        echo -e "  ${YELLOW}2)${RESET} ${BLUE}Add Backhaul Client${RESET}"
-        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Return to main menu${RESET}"
-        echo ""
-        draw_line "$CYAN" "-" 40
-        echo -e "👉 ${CYAN}Your choice:${RESET} "
-        read -p "" backhaul_tunnel_choice
-        echo ""
-
-        case $backhaul_tunnel_choice in
-          1)
-            add_new_backhaul_server_action
-            ;;
-          2)
-            add_new_backhaul_client_action
-            ;;
-          3)
-            echo -e "${YELLOW}Returning to main menu...${RESET}"
-            break
-            ;;
-          *)
-            echo -e "${RED}❌ Invalid option.${RESET}"
-            echo ""
-            echo -e "${YELLOW}Press Enter to continue...${RESET}"
-            read -p ""
-            ;;
-        esac
-      done
-      ;;
-    3) # Uninstall WGTunnel and cleanup
-      uninstall_backhaul_action
-      ;;
-    4) # Exit
-      exit 0
-      ;;
-    *)
-      echo -e "${RED}❌ Invalid choice. Exiting.${RESET}"
-      echo ""
-      echo -e "${YELLOW}Press Enter to continue...${RESET}"
-      read -p ""
-    ;;
-  esac
-  echo ""
-done
 
 # New function for adding a Backhaul server
 add_new_backhaul_server_action() {
@@ -1247,3 +1155,95 @@ EOF
   echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
   read -p ""
 }
+while true; do
+  # Clear terminal and show logo
+  clear
+  echo -e "${CYAN}"
+  figlet -f slant "WGTunnel"
+  echo -e "${CYAN}"
+  draw_line "$CYAN" "=" 80 # Decorative line
+  echo ""
+  echo -e "Developed by ErfanXRay => ${BOLD_GREEN}https://github.com/Erfan-XRay/HPulse${RESET}"
+  echo -e "Telegram Channel => ${BOLD_GREEN}@Erfan_XRay${RESET}"
+  echo -e "Tunnel script for ${CYAN}WireGuard & OpenVPN${RESET} (Backhaul UDP)"
+  echo ""
+  # Get server IP addresses
+  SERVER_IPV4=$(hostname -I | awk '{print $1}')
+  # SERVER_IPV6=$(hostname -I | awk '{print $2}') # This might be empty if no IPv6
+
+
+  draw_line "$CYAN" "=" 40 # Decorative line
+  echo -e "${CYAN}     🌐 Server Information${RESET}"
+  draw_line "$CYAN" "=" 40 # Decorative line
+  echo -e "  ${WHITE}IPv4 Address: ${YELLOW}$SERVER_IPV4${RESET}"
+  echo -e "  ${WHITE}Backhaul Status: $(check_backhaul_installation_status)${RESET}"
+  echo -e "  ${WHITE}Script Version: ${YELLOW}$SCRIPT_VERSION${RESET}"
+  draw_line "$CYAN" "=" 40 # Decorative line
+  echo "" # Added for spacing
+
+  # Menu
+  echo "Select an option:"
+  echo ""
+  echo -e "${MAGENTA}1) Install Backhaul (UDP Tunnel)${RESET}"
+  echo -e "${CYAN}2) Backhaul tunnel management${RESET}"
+  echo -e "${RED}3) Uninstall WGTunnel and cleanup${RESET}"
+  echo -e "${WHITE}4) Exit${RESET}"
+  echo ""
+  read -p "👉 Your choice: " choice
+
+  case $choice in
+    1)
+      install_backhaul_action
+      ;;
+    2) # Backhaul tunnel management
+      while true; do
+        clear
+        echo ""
+        draw_line "$CYAN" "=" 40
+        echo -e "${CYAN}     🌐 Backhaul Tunnel Management${RESET}"
+        draw_line "$CYAN" "=" 40
+        echo ""
+        echo -e "  ${YELLOW}1)${RESET} ${MAGENTA}Add Backhaul Server${RESET}"
+        echo -e "  ${YELLOW}2)${RESET} ${BLUE}Add Backhaul Client${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Return to main menu${RESET}"
+        echo ""
+        draw_line "$CYAN" "-" 40
+        echo -e "👉 ${CYAN}Your choice:${RESET} "
+        read -p "" backhaul_tunnel_choice
+        echo ""
+
+        case $backhaul_tunnel_choice in
+          1)
+            add_new_backhaul_server_action
+            ;;
+          2)
+            add_new_backhaul_client_action
+            ;;
+          3)
+            echo -e "${YELLOW}Returning to main menu...${RESET}"
+            break
+            ;;
+          *)
+            echo -e "${RED}❌ Invalid option.${RESET}"
+            echo ""
+            echo -e "${YELLOW}Press Enter to continue...${RESET}"
+            read -p ""
+            ;;
+        esac
+      done
+      ;;
+    3) # Uninstall WGTunnel and cleanup
+      uninstall_backhaul_action
+      ;;
+    4) # Exit
+      exit 0
+      ;;
+    *)
+      echo -e "${RED}❌ Invalid choice. Exiting.${RESET}"
+      echo ""
+      echo -e "${YELLOW}Press Enter to continue...${RESET}"
+      read -p ""
+    ;;
+  esac
+  echo ""
+done
