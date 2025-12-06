@@ -930,6 +930,7 @@ add_new_backhaul_server_action() {
 [server]
 bind_addr = "0.0.0.0:$listen_port"
 transport = "tcp"
+accept_udp = true
 token = "$token"
 heartbeat = 40
 EOF
